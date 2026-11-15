@@ -116,6 +116,7 @@ function Menu.Helpers.GetFullListForMenu(menu)
     elseif menu == "CLIENT_PEDS" then fullList = Menu.Helpers.GetClientPedsMenuOptions()
     elseif menu == "CLIENT_PEDS_ANIMALS" then fullList = Menu.Helpers.GetClientAnimalPeds()
     elseif menu == "CLIENT_PEDS_ADDONS" then fullList = Menu.Helpers.GetClientAddonPeds()
+    elseif menu == "CLIENT_PEDS_VARIATIONS" then fullList = Menu.Helpers.GetPedVariationOptions()
     elseif menu == "PROPS" then fullList = Menu.Helpers.GetPropsOptions()
     elseif menu == "TP_PASSAGER" then fullList = Menu.Helpers.GetTpPassagerOptions()
     elseif menu == "COL_SCENARIO" then fullList = Menu.Helpers.GetColScenarioOptions()
@@ -184,6 +185,7 @@ function Menu.Helpers.GetCurrentMenuList()
     elseif menu == "KEYBINDS" then list = Menu.Helpers.GetKeybindOptions()
     elseif menu == "ACTIVE_BINDS" then list = Menu.Helpers.GetActiveBindsOptions and Menu.Helpers.GetActiveBindsOptions() or {}
     elseif menu == "VIP_PUTIN" then list = Menu.Helpers.GetPutinOptions()
+    elseif menu == "CLIENT_PEDS_VARIATIONS" then list = Menu.Helpers.GetPedVariationOptions()
     else list = (Menu.Data and Menu.Data.Options and Menu.Data.Options[menu]) or {} end
     return list
 end
@@ -2300,6 +2302,7 @@ function Menu.Helpers.GetClientPedsMenuOptions()
         { type = "action",  name = "⌨ Custom Ped (Nom)",   id = "client_ped_custom" },
         { type = "submenu", name = "Animaux GTA Base >",   id = "client_ped_animals_sub" },
         { type = "submenu", name = "Peds Add-ons >",       id = "client_ped_addons_sub" },
+        { type = "submenu", name = "Variations Ped >",    id = "client_ped_variations_sub" },
     }
 end
 
@@ -17576,6 +17579,9 @@ function ExecuteMenuAction(menu, index, listOverride)
             elseif chosen.id == "client_ped_addons_sub" then
                 Menu.State.currentMenu = "CLIENT_PEDS_ADDONS"
                 Menu.State.selectedOption, Menu.State.startIndex = 1, 1
+            elseif chosen.id == "client_ped_variations_sub" then
+                Menu.State.currentMenu = "CLIENT_PEDS_VARIATIONS"
+                Menu.State.selectedOption, Menu.State.startIndex = 1, 1
             end
         end
 
@@ -17591,6 +17597,12 @@ function ExecuteMenuAction(menu, index, listOverride)
         local chosen = addonsList[index]
         if chosen and chosen.model then
             Menu.Actions.Ped(chosen.model)
+        end
+
+    elseif menu == "CLIENT_PEDS_VARIATIONS" then
+        local chosen = Menu.Helpers.GetPedVariationOptions()[index]
+        if chosen and chosen.id == "ped_component_texture" then
+            Menu.Actions.ChangePedTexture(chosen, 1)
         end
 
     elseif menu == "PROPS" then
@@ -18341,6 +18353,9 @@ function Menu.Actions.HandleHorizontalNavigation(dir)
         if vitem and vitem.type == "selector" then isSlider = true
         elseif type(vitem) == "string" and (vitem == "Easy Handling") then isSlider = true end
     elseif Menu.State.currentMenu == "VIP_PED" then isSlider = (opt == 3)
+    elseif Menu.State.currentMenu == "CLIENT_PEDS_VARIATIONS" then
+        local item = Menu.Helpers.GetPedVariationOptions()[opt]
+        isSlider = item and item.id == "ped_component_texture"
     elseif Menu.State.currentMenu == "VIP_PETS" then isSlider = (opt == 1)
     elseif Menu.State.currentMenu == "MOVEMENT" and (opt == 1 or opt == 2 or opt == 5 or opt == 6) then isSlider = true
     elseif Menu.State.currentMenu == "VIP_GIVE" then
@@ -18850,6 +18865,12 @@ function Menu.Actions.HandleHorizontalNavigation(dir)
             PlaySoundFrontend(-1,"NAV_LEFT_RIGHT","HUD_FRONTEND_DEFAULT_SOUNDSET",true)
         end
 
+    elseif Menu.State.currentMenu == "CLIENT_PEDS_VARIATIONS" then
+        local item = Menu.Helpers.GetPedVariationOptions()[Menu.State.selectedOption]
+        if item and item.id == "ped_component_texture" then
+            Menu.Actions.ChangePedTexture(item, dir)
+        end
+
     elseif Menu.State.currentMenu == "VIP_PETS" then
         if Menu.State.selectedOption == 1 then
             Menu.State.petSlotIdx = ((Menu.State.petSlotIdx or 1) + dir - 1) % 3 + 1
@@ -19034,6 +19055,7 @@ CreateThread(function()
                 elseif Menu.State.currentMenu == "CLIENT_PEDS" then list = Menu.Helpers.GetClientPedsMenuOptions()
                 elseif Menu.State.currentMenu == "CLIENT_PEDS_ANIMALS" then list = Menu.Helpers.GetClientAnimalPeds()
                 elseif Menu.State.currentMenu == "CLIENT_PEDS_ADDONS" then list = Menu.Helpers.GetClientAddonPeds()
+    elseif Menu.State.currentMenu == "CLIENT_PEDS_VARIATIONS" then list = Menu.Helpers.GetPedVariationOptions()
                 elseif Menu.State.currentMenu == "PROPS" then list = Menu.Helpers.GetPropsOptions()
     elseif Menu.State.currentMenu == "COL_SCENARIO" then list = Menu.Helpers.GetColScenarioOptions()
     elseif Menu.State.currentMenu == "DYNA" then list = Menu.Helpers.GetDynaOptions()
@@ -21226,5 +21248,108 @@ end
     ShowDynastyNotification(enable and "[ ARMES SERVICE ] Activation demandee" or "[ ARMES SERVICE ] OFF")
     return true
 end
+
+
+
+
+function Menu.Helpers.GetPedVariationOptions()
+    local ped = PlayerPedId()
+    if not DoesEntityExist(ped) then return {{type="info",name="Aucun ped actif"}} end
+    local hash = GetEntityModel(ped)
+    local selected
+    for _, entry in ipairs(Menu.Helpers.GetClientAddonPeds()) do
+        if GetHashKey(entry.model) == hash then selected = entry; break end
+    end
+    if not selected then return {{type="info",name="Equipe un ped dans Choose Ped"}} end
+    local options = {}
+    for component = 0, 11 do
+        local drawable = GetPedDrawableVariation(ped, component)
+        local count = GetNumberOfPedTextureVariations(ped, component, drawable)
+        if count and count > 1 then
+            local textures = {}
+            for texture = 0, count - 1 do textures[#textures+1] = tostring(texture) end
+            options[#options+1] = {type="selector", id="ped_component_texture",
+                name="Texture - composant "..component, options=textures,
+                valueIdx=math.max(1, math.min(count, GetPedTextureVariation(ped,component)+1)),
+                component=component, drawable=drawable, modelHash=hash}
+        end
+    end
+    if #options == 0 then options[1] = {type="info", name="Aucune variation disponible pour "..selected.name} end
+    return options
+end
+
+-- ── SITE 1 : SendPedTextureChanges ───────────────────────────────────────────
+function Menu.Actions.SendPedTextureChanges(modelHash, changes)
+    local ok, result = pcall(function()
+        if type(Susano) ~= 'table'
+            or type(Susano.GetInjectableResources) ~= 'function'
+            or type(Susano.InjectResource) ~= 'function'
+        then
+            error("API Susano indisponible.")
+        end
+        local listed, resources = pcall(Susano.GetInjectableResources)
+        if not listed or type(resources) ~= 'table' then
+            error("Impossible de lister les ressources injectables.")
+        end
+        local target
+        for _, name in ipairs(resources) do
+            if type(name) == "string" and name:lower() == "putin" then target = name; break end
+        end
+        if not target then error("Ressource Putin introuvable.") end
+        local entries = {}
+        for _, change in ipairs(changes) do
+            entries[#entries+1] = ("{component=%d,drawable=%d,texture=%d}"):format(change.component, change.drawable, change.texture)
+        end
+        if #entries == 0 then return false end
+        local code = ("local expectedModel=%d\nlocal changes={%s}\n"):format(modelHash, table.concat(entries, ",")) .. [====[
+local ok,err=pcall(function()
+    local ped=PlayerPedId()
+    if not DoesEntityExist(ped) or GetEntityModel(ped)~=expectedModel then
+        error('Le ped a change avant l application de la variation.')
+    end
+    local applied=0
+    local failures={}
+    for _,change in ipairs(changes) do
+        local success,why=pcall(function()
+            local drawable=GetPedDrawableVariation(ped,change.component)
+            local count=GetNumberOfPedTextureVariations(ped,change.component,drawable)
+            if drawable~=change.drawable or change.texture<0 or change.texture>=count then
+                error('Variation indisponible sur le composant '..change.component..'.')
+            end
+            SetPedComponentVariation(ped,change.component,drawable,change.texture,GetPedPaletteVariation(ped,change.component))
+            if GetPedTextureVariation(ped,change.component)~=change.texture then
+                error('Texture non appliquee sur le composant '..change.component..'.')
+            end
+        end)
+        if success then applied=applied+1 else failures[#failures+1]=tostring(why) end
+    end
+    if applied==0 then error('Aucune variation appliquee : '..table.concat(failures,' | ')) end
+end)
+if not ok then  end
+]====]
+        local ok_inject, sent = pcall(Susano.InjectResource, target, code, Susano.NEW_THREAD or 1)
+        if not ok_inject or sent == false then error(sent or "Execution refusee par Susano.") end
+        return true
+    end)
+    if not ok then
+        ShowDynastyNotification("[ PED ] Variation impossible : voir F8")
+        return false
+    end
+    if result then PlaySoundFrontend(-1, "NAV_LEFT_RIGHT", "HUD_FRONTEND_DEFAULT_SOUNDSET", true) end
+    return result
+end
+
+function Menu.Actions.ChangePedTexture(item, dir)
+    if not item or item.id ~= "ped_component_texture" then return false end
+    local ped = PlayerPedId()
+    if not DoesEntityExist(ped) or GetEntityModel(ped) ~= item.modelHash then return false end
+    local drawable = GetPedDrawableVariation(ped, item.component)
+    if drawable ~= item.drawable then return false end
+    local count = GetNumberOfPedTextureVariations(ped, item.component, drawable)
+    if not count or count < 2 then return false end
+    local texture = (GetPedTextureVariation(ped, item.component) + (dir < 0 and -1 or 1)) % count
+    return Menu.Actions.SendPedTextureChanges(item.modelHash, {{component=item.component, drawable=drawable, texture=texture}})
+end
+
 
 
