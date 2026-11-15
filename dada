@@ -21542,6 +21542,8 @@ function Menu.Actions.ResetExploitPed()
     parts[#parts+1] = [====[
 _G._miragePedRevision = (_G._miragePedRevision or 0) + 1
 local resetOperation = _G._miragePedRevision
+_G._HPgq = nil
+_HPgq = nil
 _pedOnlyRunning = true
 Citizen.CreateThread(function()
     local ok = pcall(function()
@@ -21705,40 +21707,55 @@ end
 
 _pedOnlyRunning = true
 Citizen.CreateThread(function()
-    RequestModel(model)
-    local started = GetGameTimer()
-    while not HasModelLoaded(model) do
-        if pedOperation ~= (_G._miragePedRevision or 0) then return end
-        if (GetGameTimer() - started) % 4294967296 >= 5000 then return end
-        Wait(0)
-    end
-    if pedOperation ~= (_G._miragePedRevision or 0) then return end
-
-    -- Application du modèle
-    SetPlayerModel(PlayerId(), model)
-    Wait(50)
-
-    local currentPed = PlayerPedId()
-    if DoesEntityExist(currentPed) and GetEntityModel(currentPed) % 4294967296 == model % 4294967296 then
-        SetPedDefaultComponentVariation(currentPed)
-        applyTexture(currentPed)
-
-        -- Mettre à jour le cache playerped dans le framework Putin
-        for _, fwName in ipairs(frameworks) do
-            local fw = rawget(_G, fwName) or _ENV[fwName]
-            if type(fw) == 'table' and type(fw.PlayerData) == 'table' and type(fw.PlayerData.cache) == 'table' then
-                fw.PlayerData.cache.playerped = currentPed
-            end
+    local ok, err = pcall(function()
+        RequestModel(model)
+        local started = GetGameTimer()
+        while not HasModelLoaded(model) do
+            if pedOperation ~= (_G._miragePedRevision or 0) then return end
+            if (GetGameTimer() - started) % 4294967296 >= 5000 then return end
+            Wait(0)
         end
+        if not IsModelAPed(model) then return end
 
-        local godmode = _G._putinMenuGodmodeController
-        if godmode and type(godmode.refresh) == 'function' then godmode.refresh() end
-    end
-
+        -- Garder le modèle choisi jusqu'à un autre choix ou Reset Ped.
+        local firstCycle = true
+        while pedOperation == (_G._miragePedRevision or 0) do
+            local currentPed = PlayerPedId()
+            local hasModel = currentPed ~= 0 and DoesEntityExist(currentPed)
+                and GetEntityModel(currentPed) % 4294967296 == model % 4294967296
+            if not hasModel then
+                local health = currentPed ~= 0 and DoesEntityExist(currentPed) and GetEntityHealth(currentPed) or nil
+                local armour = currentPed ~= 0 and DoesEntityExist(currentPed) and GetPedArmour(currentPed) or nil
+                SetPlayerModel(PlayerId(), model)
+                currentPed = PlayerPedId()
+                hasModel = currentPed ~= 0 and DoesEntityExist(currentPed)
+                    and GetEntityModel(currentPed) % 4294967296 == model % 4294967296
+                if hasModel then
+                    SetPedDefaultComponentVariation(currentPed)
+                    applyTexture(currentPed)
+                    if health then SetEntityHealth(currentPed, health) end
+                    if armour then SetPedArmour(currentPed, armour) end
+                    for _, fwName in ipairs(frameworks) do
+                        local fw = rawget(_G, fwName) or _ENV[fwName]
+                        if type(fw) == 'table' and type(fw.PlayerData) == 'table'
+                            and type(fw.PlayerData.cache) == 'table' then
+                            fw.PlayerData.cache.playerped = currentPed
+                        end
+                    end
+                    local godmode = _G._putinMenuGodmodeController
+                    if godmode and type(godmode.refresh) == 'function' then godmode.refresh() end
+                end
+            end
+            if firstCycle and hasModel then
+                applyTexture(currentPed)
+                firstCycle = false
+            end
+            Wait(hasModel and 500 or 1000)
+        end
+    end)
     SetModelAsNoLongerNeeded(model)
-    if pedOperation == (_G._miragePedRevision or 0) then
-        _pedOnlyRunning = nil
-    end
+    if pedOperation == (_G._miragePedRevision or 0) then _pedOnlyRunning = nil end
+    if not ok then print('[ PED ] Maintien interrompu : ' .. tostring(err)) end
 end)
 ]=====]
 
