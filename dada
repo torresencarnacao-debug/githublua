@@ -21607,47 +21607,60 @@ function Menu.Actions.Ped(modelName, textureIndex)
     Menu.Helpers.CaptureExploitPedOriginal()
     local modelStr = tostring(modelName)
 
-    -- Annuler le précédent et nettoyer
+    -- 1. Nettoyage et incrémentation de révision
     local resetCode = [=[
         _G._miragePedRevision = (_G._miragePedRevision or 0) + 1
         _pedOnlyRunning = nil
         if _pedChimpShopTest then
             for _, item in ipairs(_pedChimpShopTest.hooks or {}) do
-                local globals = item.environment or _G
-                if globals[item.name] == item.wrapper then globals[item.name] = item.original end
+                local g = item.environment or _G
+                if g[item.name] == item.wrapper then g[item.name] = item.original end
                 if _G[item.name] == item.wrapper then _G[item.name] = item.original end
             end
             _pedChimpShopTest = nil
         end
     ]=]
-    pcall(Susano.InjectResource, target, resetCode, Susano.NEW_THREAD or 1)
+    local resetOk, resetSent = pcall(Susano.InjectResource, target, resetCode, Susano.NEW_THREAD or 1)
+    if not resetOk or resetSent == false then
+        ShowDynastyNotification("[ PED ] Nettoyage impossible : voir F8")
+        return false
+    end
 
     local texture = tonumber(textureIndex)
     if texture then texture = math.max(0, math.floor(texture)) end
 
+    -- 2. Injection du ped avec bypass natif Putin (PedsList + PlayerData + Hook)
     local code = ('local modelName = %q\nlocal textureIndex = %d\n'):format(modelStr, texture or -1) .. [=====[
 if _pedOnlyRunning then return end
-
-if _pedChimpShopTest then
-    for _, item in ipairs(_pedChimpShopTest.hooks or {}) do
-        local globals = item.environment or _G
-        if globals[item.name] == item.wrapper then globals[item.name] = item.original end
-        if _G[item.name] == item.wrapper then _G[item.name] = item.original end
-    end
-    _pedChimpShopTest = nil
-end
 
 local pedOperation = _G._miragePedRevision or 0
 local model = GetHashKey(modelName)
 
-local function installShopTest()
-    if _pedChimpShopTest then
-        if _pedChimpShopTest.model == model then return true end
-        return false
+-- A. Inscription native dans PedsList (contourne le check de peds.lua sans forcer)
+if type(PedsList) == 'table' then
+    local entry = { name = modelName, label = modelName, vip = false }
+    PedsList[tostring(model)] = entry
+    PedsList[tostring(model % 4294967296)] = entry
+    PedsList[modelName] = entry
+end
+
+-- B. Ajout dans PlayerData.peds sur les instances framework connues
+local frameworks = { '_W90', '_FRL', '_xmBZLa' }
+for _, fwName in ipairs(frameworks) do
+    local fw = rawget(_G, fwName) or _ENV[fwName]
+    if type(fw) == 'table' and type(fw.PlayerData) == 'table' then
+        if type(fw.PlayerData.peds) ~= 'table' then fw.PlayerData.peds = {} end
+        fw.PlayerData.peds[modelName] = { name = modelName }
     end
+end
 
+-- C. Flag interne de Putin : indique qu'un ped boutique légitime est en cours
+_G._HPgq = true
+_HPgq = true
+
+-- D. Hook de sécurité sur _TniyO et ses alias
+local function installHooks()
     local hooks = {}
-
     local function makeWrapper(original)
         return function(choice, ...)
             local hash
@@ -21663,8 +21676,7 @@ local function installShopTest()
         end
     end
 
-    -- 1. Essai direct sur les noms de fonctions connus dans Putin (Dynasty)
-    local candidateNames = { '_bbbts9', '_cU8jt', '_TniyO', '_CRNUO' }
+    local candidateNames = { '_TniyO', '_bbbts9', '_cU8jt', '_CRNUO' }
     for _, name in ipairs(candidateNames) do
         local fn = rawget(_G, name) or _ENV[name]
         if type(fn) == 'function' then
@@ -21674,112 +21686,59 @@ local function installShopTest()
             _ENV[name] = wrapper
         end
     end
-
-    -- 2. Si non trouvées par nom direct, scanner les environnements disponibles
-    if #hooks == 0 then
-        local environments, seen = {}, {}
-        local function addEnv(g)
-            if type(g) == 'table' and not seen[g] then
-                seen[g] = true
-                environments[#environments + 1] = g
-            end
-        end
-        addEnv(_G)
-        addEnv(_ENV)
-
-        for _, env in ipairs(environments) do
-            for name, candidate in next, env do
-                if type(name) == 'string' and type(candidate) == 'function' then
-                    local matched = false
-                    if debug and type(debug.getinfo) == 'function' then
-                        local ok, info = pcall(debug.getinfo, candidate, 'S')
-                        if ok and info and type(info.source) == 'string' then
-                            local src = info.source:lower():gsub(string.char(92), '/')
-                            if src:match('peds%.lua$') or src:match('boutique') then
-                                matched = true
-                            end
-                        end
-                    end
-                    if matched then
-                        local wrapper = makeWrapper(candidate)
-                        hooks[#hooks + 1] = { name = name, original = candidate, wrapper = wrapper, environment = env }
-                        env[name] = wrapper
-                        _G[name] = wrapper
-                    end
-                end
-            end
-        end
-    end
-
-    if #hooks == 0 then
-        return false
-    end
-
     _pedChimpShopTest = { model = model, hooks = hooks }
-    return true
 end
 
+installHooks()
+
 local function applyTexture(ped)
-    local applied = 0
+    if textureIndex < 0 then return end
     for component = 0, 11 do
         local drawable = GetPedDrawableVariation(ped, component)
         local count = GetNumberOfPedTextureVariations(ped, component, drawable)
-        if count > 1 and textureIndex >= 0 and textureIndex < count then
+        if count and count > 1 and textureIndex < count then
             local palette = GetPedPaletteVariation(ped, component)
             SetPedComponentVariation(ped, component, drawable, textureIndex, palette)
-            if GetPedTextureVariation(ped, component) == textureIndex then
-                applied = applied + 1
-            end
         end
     end
 end
 
 _pedOnlyRunning = true
 Citizen.CreateThread(function()
-    local ok, err = pcall(function()
-        RequestModel(model)
-        local started = GetGameTimer()
-        while not HasModelLoaded(model) do
-            if pedOperation ~= (_G._miragePedRevision or 0) then return end
-            if (GetGameTimer() - started) % 4294967296 >= 5000 then return end
-            Wait(0)
-        end
+    RequestModel(model)
+    local started = GetGameTimer()
+    while not HasModelLoaded(model) do
         if pedOperation ~= (_G._miragePedRevision or 0) then return end
+        if (GetGameTimer() - started) % 4294967296 >= 5000 then return end
+        Wait(0)
+    end
+    if pedOperation ~= (_G._miragePedRevision or 0) then return end
 
-        -- Appliquer le hook de bypass boutique
-        installShopTest()
+    -- Application du modèle
+    SetPlayerModel(PlayerId(), model)
+    Wait(50)
 
-        local function hasTargetModel()
-            local ped = PlayerPedId()
-            return ped ~= 0 and DoesEntityExist(ped)
-                and GetEntityModel(ped) % 4294967296 == model % 4294967296
-        end
+    local currentPed = PlayerPedId()
+    if DoesEntityExist(currentPed) and GetEntityModel(currentPed) % 4294967296 == model % 4294967296 then
+        SetPedDefaultComponentVariation(currentPed)
+        applyTexture(currentPed)
 
-        if not hasTargetModel() then
-            SetPlayerModel(PlayerId(), model)
-            if hasTargetModel() then
-                SetPedDefaultComponentVariation(PlayerPedId())
+        -- Mettre à jour le cache playerped dans le framework Putin
+        for _, fwName in ipairs(frameworks) do
+            local fw = rawget(_G, fwName) or _ENV[fwName]
+            if type(fw) == 'table' and type(fw.PlayerData) == 'table' and type(fw.PlayerData.cache) == 'table' then
+                fw.PlayerData.cache.playerped = currentPed
             end
         end
 
-        if hasTargetModel() then
-            local godmode = _G._putinMenuGodmodeController
-            if godmode and type(godmode.refresh) == 'function' then godmode.refresh() end
-            if textureIndex >= 0 then applyTexture(PlayerPedId()) end
+        local godmode = _G._putinMenuGodmodeController
+        if godmode and type(godmode.refresh) == 'function' then godmode.refresh() end
+    end
 
-            local observationStart = GetGameTimer()
-            while (GetGameTimer() - observationStart) % 4294967296 < 10000 do
-                Wait(250)
-                if pedOperation ~= (_G._miragePedRevision or 0) then return end
-                if not hasTargetModel() then
-                    -- Si le serveur/script tente de réinitialiser le ped, réappliquer
-                    SetPlayerModel(PlayerId(), model)
-                end
-            end
-        end
-    end)
-    if pedOperation == (_G._miragePedRevision or 0) then _pedOnlyRunning = nil end
     SetModelAsNoLongerNeeded(model)
+    if pedOperation == (_G._miragePedRevision or 0) then
+        _pedOnlyRunning = nil
+    end
 end)
 ]=====]
 
@@ -21803,3 +21762,5 @@ function Menu.Helpers.GetPedOptions()
     end
     return options
 end
+
+
