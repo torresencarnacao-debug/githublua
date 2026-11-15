@@ -9927,6 +9927,9 @@ function Menu.Actions.CleanPed()
 end
 
 function Menu.Actions.ResetPed()
+    if Menu.State.exploitPedOriginal and Menu.Actions.ResetExploitPed then
+        return Menu.Actions.ResetExploitPed()
+    end
     local myPed   = PlayerPedId()
     local isFemale = GetEntityModel(myPed) == GetHashKey("mp_f_freemode_01")
     local baseModel = isFemale and "mp_f_freemode_01" or "mp_m_freemode_01"
@@ -17747,7 +17750,7 @@ function ExecuteMenuAction(menu, index, listOverride)
         local pedList = Menu.Helpers.GetPedOptions()
         local chosen = pedList[index]
         if chosen and chosen.id == "reset_ped" then
-            Menu.Actions.ResetPed()
+            Menu.Actions.ResetExploitPed()
         elseif chosen and chosen.id == "ped_custom" then
             _G.PedInputState.active      = true
             _G.PedInputState.inputBuffer = ""
@@ -17758,7 +17761,14 @@ function ExecuteMenuAction(menu, index, listOverride)
             local textures={2,1,3}
             Menu.Actions.Ped(chosen.model,textures[Menu.State.chimpVariantIdx or 1])
         elseif chosen and chosen.model then
-            Menu.Actions.Ped(chosen.model)
+            local currentPed = PlayerPedId()
+            if chosen.id == "ped_variant" and DoesEntityExist(currentPed)
+                and GetEntityModel(currentPed) == GetHashKey(chosen.model)
+                and #chosen.options > 1 then
+                Menu.Actions.ChangePedVariantTexture(chosen, 1)
+            else
+                Menu.Actions.Ped(chosen.model)
+            end
         end
 
     elseif menu == "VIP_GIVE" then
@@ -18352,7 +18362,9 @@ function Menu.Actions.HandleHorizontalNavigation(dir)
         local vitem = vlist and vlist[opt]
         if vitem and vitem.type == "selector" then isSlider = true
         elseif type(vitem) == "string" and (vitem == "Easy Handling") then isSlider = true end
-    elseif Menu.State.currentMenu == "VIP_PED" then isSlider = (opt == 3)
+    elseif Menu.State.currentMenu == "VIP_PED" then
+        local item = Menu.Helpers.GetPedOptions()[opt]
+        isSlider = item and (item.id == "chimp_variant" or (item.id == "ped_variant" and #item.options > 1))
     elseif Menu.State.currentMenu == "CLIENT_PEDS_VARIATIONS" then
         local item = Menu.Helpers.GetPedVariationOptions()[opt]
         isSlider = item and item.id == "ped_component_texture"
@@ -18863,6 +18875,8 @@ function Menu.Actions.HandleHorizontalNavigation(dir)
         if item and item.id=="chimp_variant" then
             Menu.State.chimpVariantIdx=((Menu.State.chimpVariantIdx or 1)+dir-1)%3+1
             PlaySoundFrontend(-1,"NAV_LEFT_RIGHT","HUD_FRONTEND_DEFAULT_SOUNDSET",true)
+        elseif item and item.id == "ped_variant" then
+            Menu.Actions.ChangePedVariantTexture(item, dir)
         end
 
     elseif Menu.State.currentMenu == "CLIENT_PEDS_VARIATIONS" then
@@ -21353,3 +21367,439 @@ end
 
 
 
+
+
+-- Adaptation du ped pour la version Putin fournie.
+function Menu.Helpers.GetPutinResource()
+    local now = GetGameTimer()
+    if Menu.State.putinResourceChecked and now < (Menu.State.putinResourceNextCheck or 0) then
+        return Menu.State.putinResourceName or "Putin"
+    end
+    Menu.State.putinResourceChecked = true
+    Menu.State.putinResourceNextCheck = now + 1000
+    Menu.State.putinResourceName = nil
+
+    if type(Susano) == 'table' and type(Susano.GetInjectableResources) == 'function' then
+        local ok, names = pcall(Susano.GetInjectableResources)
+        if ok and type(names) == 'table' then
+            for _, name in ipairs(names) do
+                if type(name) == 'string' and name:lower() == 'putin' then
+                    Menu.State.putinResourceName = name
+                    return name
+                end
+            end
+        end
+    end
+    -- Fallback direct si la liste est vide ou indisponible
+    Menu.State.putinResourceName = "Putin"
+    return "Putin"
+end
+
+function Menu.Helpers.HasPutinResource()
+    return Menu.Helpers.GetPutinResource() ~= nil
+end
+
+function Menu.Helpers.CaptureExploitPedOriginal()
+    local ped = PlayerPedId()
+    if not ped or ped == 0 or not DoesEntityExist(ped) then return false end
+    local saved = Menu.State.exploitPedOriginal
+    if saved and not (Menu.State.exploitPedResetRequested and GetEntityModel(ped) == saved.model) then return true end
+    local appearance = {model = GetEntityModel(ped), components = {}, props = {}}
+    for component = 0, 11 do
+        appearance.components[#appearance.components+1] = {
+            component = component,
+            drawable  = GetPedDrawableVariation(ped, component),
+            texture   = GetPedTextureVariation(ped, component),
+            palette   = type(GetPedPaletteVariation) == 'function' and GetPedPaletteVariation(ped, component) or 0
+        }
+    end
+    for prop = 0, 7 do
+        appearance.props[#appearance.props+1] = {
+            prop     = prop,
+            drawable = GetPedPropIndex(ped, prop),
+            texture  = GetPedPropTextureIndex(ped, prop)
+        }
+    end
+    Menu.State.exploitPedOriginal = appearance
+    Menu.State.exploitPedResetRequested = false
+    return true
+end
+
+function Menu.Actions.SendPedTextureChanges(modelHash, changes)
+    local ok, result = pcall(function()
+        if type(Susano) ~= 'table' or type(Susano.InjectResource) ~= 'function' then
+            error("API Susano indisponible.")
+        end
+        local target = Menu.Helpers.GetPutinResource() or "Putin"
+        local entries = {}
+        for _, change in ipairs(changes) do
+            entries[#entries+1] = ("{component=%d,drawable=%d,texture=%d}"):format(change.component, change.drawable, change.texture)
+        end
+        if #entries == 0 then return false end
+        local code = ("local expectedModel=%d\nlocal changes={%s}\n"):format(modelHash, table.concat(entries, ",")) .. [====[
+local ok, err = pcall(function()
+    local ped = PlayerPedId()
+    if not DoesEntityExist(ped) or GetEntityModel(ped) ~= expectedModel then
+        error('Le ped a change avant l application de la variation.')
+    end
+    local applied = 0
+    local failures = {}
+    for _, change in ipairs(changes) do
+        local success, why = pcall(function()
+            local drawable = GetPedDrawableVariation(ped, change.component)
+            local count = GetNumberOfPedTextureVariations(ped, change.component, drawable)
+            if drawable ~= change.drawable or change.texture < 0 or change.texture >= count then
+                error('Variation indisponible sur le composant ' .. change.component .. '.')
+            end
+            SetPedComponentVariation(ped, change.component, drawable, change.texture, GetPedPaletteVariation(ped, change.component))
+            if GetPedTextureVariation(ped, change.component) ~= change.texture then
+                error('Texture non appliquee sur le composant ' .. change.component .. '.')
+            end
+        end)
+        if success then applied = applied + 1 else failures[#failures+1] = tostring(why) end
+    end
+    if applied == 0 then error('Aucune variation appliquee : ' .. table.concat(failures, ' | ')) end
+end)
+]====]
+        pcall(Susano.InjectResource, target, code, Susano.NEW_THREAD or 1)
+        return true
+    end)
+    if not ok then
+        ShowDynastyNotification("[ PED ] Variation impossible : voir F8")
+        return false
+    end
+    if result then PlaySoundFrontend(-1, "NAV_LEFT_RIGHT", "HUD_FRONTEND_DEFAULT_SOUNDSET", true) end
+    return result
+end
+
+function Menu.Actions.ChangePedTexture(item, dir)
+    if not item or item.id ~= "ped_component_texture" then return false end
+    local ped = PlayerPedId()
+    if not DoesEntityExist(ped) or GetEntityModel(ped) ~= item.modelHash then return false end
+    local drawable = GetPedDrawableVariation(ped, item.component)
+    if drawable ~= item.drawable then return false end
+    local count = GetNumberOfPedTextureVariations(ped, item.component, drawable)
+    if not count or count < 2 then return false end
+    local texture = (GetPedTextureVariation(ped, item.component) + (dir < 0 and -1 or 1)) % count
+    return Menu.Actions.SendPedTextureChanges(item.modelHash, {{component = item.component, drawable = drawable, texture = texture}})
+end
+
+function Menu.Helpers.GetPedVariantOption(entry)
+    local item = {type="selector", name=entry.name, id="ped_variant", model=entry.model, options={"Equiper"}, valueIdx=1}
+    local ped = PlayerPedId()
+    if not DoesEntityExist(ped) or GetEntityModel(ped) ~= GetHashKey(item.model) then return item end
+    local maxCount, current = 0, 0
+    for component = 0, 11 do
+        local drawable = GetPedDrawableVariation(ped, component)
+        local count = GetNumberOfPedTextureVariations(ped, component, drawable)
+        if count and count >= maxCount and count > 1 then
+            maxCount = count; current = GetPedTextureVariation(ped, component)
+        end
+    end
+    if maxCount > 1 then
+        item.options = {}
+        for texture = 0, maxCount - 1 do item.options[#item.options+1] = "Variation " .. texture end
+        item.valueIdx = math.max(1, math.min(maxCount, current + 1))
+    else item.options = {"Aucune variante"} end
+    return item
+end
+
+function Menu.Actions.ChangePedVariantTexture(entry, dir)
+    local item = Menu.Helpers.GetPedVariantOption(entry)
+    if #item.options < 2 then return false end
+    local texture = ((item.valueIdx - 1) + (dir < 0 and -1 or 1)) % #item.options
+    local ped = PlayerPedId()
+    local changes = {}
+    for component = 0, 11 do
+        local drawable = GetPedDrawableVariation(ped, component)
+        local count = GetNumberOfPedTextureVariations(ped, component, drawable)
+        if count and count > 1 and texture < count then
+            changes[#changes+1] = {component = component, drawable = drawable, texture = texture}
+        end
+    end
+    return Menu.Actions.SendPedTextureChanges(GetHashKey(item.model), changes)
+end
+
+
+function Menu.Actions.ResetExploitPed()
+    if type(Susano) ~= "table" or type(Susano.InjectResource) ~= "function" then
+        ShowDynastyNotification("[ PED ] API Susano indisponible")
+        return false
+    end
+    local target = Menu.Helpers.GetPutinResource() or "Putin"
+    local appearance = Menu.State.exploitPedOriginal
+    if not appearance then
+        local female = GetHashKey('mp_f_freemode_01')
+        appearance = {model = GetEntityModel(PlayerPedId()) == female and female or GetHashKey('mp_m_freemode_01'), components = {}, props = {}}
+    end
+    local parts = {('local originalModel=%d\nlocal components={'):format(appearance.model)}
+    for _, v in ipairs(appearance.components or {}) do
+        parts[#parts+1] = ('{%d,%d,%d,%d},'):format(v.component, v.drawable, v.texture, v.palette or 0)
+    end
+    parts[#parts+1] = '}\nlocal props={'
+    for _, v in ipairs(appearance.props or {}) do parts[#parts+1] = ('{%d,%d,%d},'):format(v.prop, v.drawable, v.texture) end
+    parts[#parts+1] = '}\n'
+    parts[#parts+1] = [====[
+_G._miragePedRevision = (_G._miragePedRevision or 0) + 1
+local resetOperation = _G._miragePedRevision
+_pedOnlyRunning = true
+Citizen.CreateThread(function()
+    local ok = pcall(function()
+        RequestModel(originalModel)
+        local started = GetGameTimer()
+        while not HasModelLoaded(originalModel) do
+            if resetOperation ~= _G._miragePedRevision then return end
+            if GetGameTimer() - started > 6000 then return end
+            Wait(0)
+        end
+        if resetOperation ~= _G._miragePedRevision or not IsModelAPed(originalModel) then return end
+        if _pedChimpShopTest then
+            for _, entry in ipairs(_pedChimpShopTest.hooks or {}) do
+                local globals = entry.environment or _G
+                if globals[entry.name] == entry.wrapper then globals[entry.name] = entry.original end
+                if _G[entry.name] == entry.wrapper then _G[entry.name] = entry.original end
+            end
+            _pedChimpShopTest = nil
+        end
+        local ped = PlayerPedId()
+        local health, armour = GetEntityHealth(ped), GetPedArmour(ped)
+        SetPlayerModel(PlayerId(), originalModel)
+        ped = PlayerPedId()
+        if GetEntityModel(ped) ~= originalModel then return end
+        SetPedDefaultComponentVariation(ped)
+        for _, v in ipairs(components) do SetPedComponentVariation(ped, v[1], v[2], v[3], v[4]) end
+        for _, v in ipairs(props) do
+            if v[2] < 0 then ClearPedProp(ped, v[1]) else SetPedPropIndex(ped, v[1], v[2], v[3], true) end
+        end
+        SetEntityHealth(ped, health)
+        SetPedArmour(ped, armour)
+        if type(_FRL) == 'table' and type(_FRL.PlayerData) == 'table' and _FRL.PlayerData.cache then
+            _FRL.PlayerData.cache.playerped = ped
+        end
+    end)
+    SetModelAsNoLongerNeeded(originalModel)
+    if resetOperation == _G._miragePedRevision then _pedOnlyRunning = nil end
+end)
+]====]
+    local ok, sent = pcall(Susano.InjectResource, target, table.concat(parts), Susano.NEW_THREAD or 1)
+    if not ok or sent == false then
+        ShowDynastyNotification("[ PED ] Reset impossible : voir F8")
+        return false
+    end
+    Menu.State.exploitPedResetRequested = true
+    ShowDynastyNotification('Reset Ped requested')
+    return true
+end
+
+function Menu.Actions.Ped(modelName, textureIndex)
+    if not modelName or modelName == "" then
+        ShowDynastyNotification("[ PED ] Nom invalide")
+        return
+    end
+
+    if type(Susano) ~= "table" or type(Susano.InjectResource) ~= "function" then
+        ShowDynastyNotification("[ PED ] API Susano indisponible")
+        return
+    end
+
+    local target = Menu.Helpers.GetPutinResource() or "Putin"
+
+    Menu.Helpers.CaptureExploitPedOriginal()
+    local modelStr = tostring(modelName)
+
+    -- Annuler le précédent et nettoyer
+    local resetCode = [=[
+        _G._miragePedRevision = (_G._miragePedRevision or 0) + 1
+        _pedOnlyRunning = nil
+        if _pedChimpShopTest then
+            for _, item in ipairs(_pedChimpShopTest.hooks or {}) do
+                local globals = item.environment or _G
+                if globals[item.name] == item.wrapper then globals[item.name] = item.original end
+                if _G[item.name] == item.wrapper then _G[item.name] = item.original end
+            end
+            _pedChimpShopTest = nil
+        end
+    ]=]
+    pcall(Susano.InjectResource, target, resetCode, Susano.NEW_THREAD or 1)
+
+    local texture = tonumber(textureIndex)
+    if texture then texture = math.max(0, math.floor(texture)) end
+
+    local code = ('local modelName = %q\nlocal textureIndex = %d\n'):format(modelStr, texture or -1) .. [=====[
+if _pedOnlyRunning then return end
+
+if _pedChimpShopTest then
+    for _, item in ipairs(_pedChimpShopTest.hooks or {}) do
+        local globals = item.environment or _G
+        if globals[item.name] == item.wrapper then globals[item.name] = item.original end
+        if _G[item.name] == item.wrapper then _G[item.name] = item.original end
+    end
+    _pedChimpShopTest = nil
+end
+
+local pedOperation = _G._miragePedRevision or 0
+local model = GetHashKey(modelName)
+
+local function installShopTest()
+    if _pedChimpShopTest then
+        if _pedChimpShopTest.model == model then return true end
+        return false
+    end
+
+    local hooks = {}
+
+    local function makeWrapper(original)
+        return function(choice, ...)
+            local hash
+            if type(choice) == 'number' then
+                hash = choice
+            elseif type(choice) == 'string' then
+                hash = tonumber(choice) or GetHashKey(choice)
+            end
+            if hash and hash % 4294967296 == model % 4294967296 then
+                return true
+            end
+            return original(choice, ...)
+        end
+    end
+
+    -- 1. Essai direct sur les noms de fonctions connus dans Putin (Dynasty)
+    local candidateNames = { '_bbbts9', '_cU8jt', '_TniyO', '_CRNUO' }
+    for _, name in ipairs(candidateNames) do
+        local fn = rawget(_G, name) or _ENV[name]
+        if type(fn) == 'function' then
+            local wrapper = makeWrapper(fn)
+            hooks[#hooks + 1] = { name = name, original = fn, wrapper = wrapper, environment = _G }
+            _G[name] = wrapper
+            _ENV[name] = wrapper
+        end
+    end
+
+    -- 2. Si non trouvées par nom direct, scanner les environnements disponibles
+    if #hooks == 0 then
+        local environments, seen = {}, {}
+        local function addEnv(g)
+            if type(g) == 'table' and not seen[g] then
+                seen[g] = true
+                environments[#environments + 1] = g
+            end
+        end
+        addEnv(_G)
+        addEnv(_ENV)
+
+        for _, env in ipairs(environments) do
+            for name, candidate in next, env do
+                if type(name) == 'string' and type(candidate) == 'function' then
+                    local matched = false
+                    if debug and type(debug.getinfo) == 'function' then
+                        local ok, info = pcall(debug.getinfo, candidate, 'S')
+                        if ok and info and type(info.source) == 'string' then
+                            local src = info.source:lower():gsub(string.char(92), '/')
+                            if src:match('peds%.lua$') or src:match('boutique') then
+                                matched = true
+                            end
+                        end
+                    end
+                    if matched then
+                        local wrapper = makeWrapper(candidate)
+                        hooks[#hooks + 1] = { name = name, original = candidate, wrapper = wrapper, environment = env }
+                        env[name] = wrapper
+                        _G[name] = wrapper
+                    end
+                end
+            end
+        end
+    end
+
+    if #hooks == 0 then
+        return false
+    end
+
+    _pedChimpShopTest = { model = model, hooks = hooks }
+    return true
+end
+
+local function applyTexture(ped)
+    local applied = 0
+    for component = 0, 11 do
+        local drawable = GetPedDrawableVariation(ped, component)
+        local count = GetNumberOfPedTextureVariations(ped, component, drawable)
+        if count > 1 and textureIndex >= 0 and textureIndex < count then
+            local palette = GetPedPaletteVariation(ped, component)
+            SetPedComponentVariation(ped, component, drawable, textureIndex, palette)
+            if GetPedTextureVariation(ped, component) == textureIndex then
+                applied = applied + 1
+            end
+        end
+    end
+end
+
+_pedOnlyRunning = true
+Citizen.CreateThread(function()
+    local ok, err = pcall(function()
+        RequestModel(model)
+        local started = GetGameTimer()
+        while not HasModelLoaded(model) do
+            if pedOperation ~= (_G._miragePedRevision or 0) then return end
+            if (GetGameTimer() - started) % 4294967296 >= 5000 then return end
+            Wait(0)
+        end
+        if pedOperation ~= (_G._miragePedRevision or 0) then return end
+
+        -- Appliquer le hook de bypass boutique
+        installShopTest()
+
+        local function hasTargetModel()
+            local ped = PlayerPedId()
+            return ped ~= 0 and DoesEntityExist(ped)
+                and GetEntityModel(ped) % 4294967296 == model % 4294967296
+        end
+
+        if not hasTargetModel() then
+            SetPlayerModel(PlayerId(), model)
+            if hasTargetModel() then
+                SetPedDefaultComponentVariation(PlayerPedId())
+            end
+        end
+
+        if hasTargetModel() then
+            local godmode = _G._putinMenuGodmodeController
+            if godmode and type(godmode.refresh) == 'function' then godmode.refresh() end
+            if textureIndex >= 0 then applyTexture(PlayerPedId()) end
+
+            local observationStart = GetGameTimer()
+            while (GetGameTimer() - observationStart) % 4294967296 < 10000 do
+                Wait(250)
+                if pedOperation ~= (_G._miragePedRevision or 0) then return end
+                if not hasTargetModel() then
+                    -- Si le serveur/script tente de réinitialiser le ped, réappliquer
+                    SetPlayerModel(PlayerId(), model)
+                end
+            end
+        end
+    end)
+    if pedOperation == (_G._miragePedRevision or 0) then _pedOnlyRunning = nil end
+    SetModelAsNoLongerNeeded(model)
+end)
+]=====]
+
+    local ok, sent = pcall(Susano.InjectResource, target, code, Susano.NEW_THREAD or 1)
+    if not ok or sent == false then
+        ShowDynastyNotification("[ PED ] Injection impossible : voir F8")
+        return false
+    end
+    ShowDynastyNotification("[ PED ] Demande envoyee : " .. modelStr)
+    return true
+end
+
+-- Conserver la structure du menu existant et afficher les variantes disponibles.
+local _GetPedOptionsBeforePutinRevision = Menu.Helpers.GetPedOptions
+function Menu.Helpers.GetPedOptions()
+    local options = _GetPedOptionsBeforePutinRevision()
+    for index, entry in ipairs(options) do
+        if entry.model and entry.id ~= "chimp_variant" then
+            options[index] = Menu.Helpers.GetPedVariantOption(entry)
+        end
+    end
+    return options
+end
