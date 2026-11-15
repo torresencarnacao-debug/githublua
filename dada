@@ -121,6 +121,8 @@ function Menu.Helpers.GetFullListForMenu(menu)
     elseif menu == "COL_SCENARIO" then fullList = Menu.Helpers.GetColScenarioOptions()
     elseif menu == "DYNA" then fullList = Menu.Helpers.GetDynaOptions()
     elseif menu == "EXPLOIT" or menu == "VIP" then fullList = Menu.Helpers.GetVipOptions()
+    elseif menu == "VIP_PUTIN" then fullList = Menu.Helpers.GetPutinOptions()
+
     elseif menu == "VIP_AURA" then fullList = Menu.Helpers.GetAuraOptions()
     elseif menu == "VIP_PETS" then fullList = Menu.Helpers.GetPetsOptions()
     elseif menu == "VIP_PED" then fullList = Menu.Helpers.GetPedOptions()
@@ -181,6 +183,7 @@ function Menu.Helpers.GetCurrentMenuList()
         else list = (Menu.Data and Menu.Data.Options and Menu.Data.Options.Vehicle and Menu.Data.Options.Vehicle.Categories and Menu.Data.Options.Vehicle.Categories[Menu.State.vehicleTab]) or {} end
     elseif menu == "KEYBINDS" then list = Menu.Helpers.GetKeybindOptions()
     elseif menu == "ACTIVE_BINDS" then list = Menu.Helpers.GetActiveBindsOptions and Menu.Helpers.GetActiveBindsOptions() or {}
+    elseif menu == "VIP_PUTIN" then list = Menu.Helpers.GetPutinOptions()
     else list = (Menu.Data and Menu.Data.Options and Menu.Data.Options[menu]) or {} end
     return list
 end
@@ -2861,6 +2864,7 @@ function Menu.Helpers.GetVipOptions()
         "Ped",
         "Give",
         "Resource Manager",
+        "Putin",
         { type = "toggle", name = "Protect",    state = "protectActive" },
         { type="action", name="Radio Usebug", id="radio_usebug" },
         { type = "separator", name = "Seed" },
@@ -2869,6 +2873,12 @@ function Menu.Helpers.GetVipOptions()
         { type = "separator", name = "── Map Collision ──" },
         { type = "selector", name = "Map Collision", id = "vip_mapcollision", valueIdx = scenIdx, options = (function() local t={} for _,s in ipairs(scenarios) do t[#t+1]=s.short end return t end)() },
         { type = "slider",   name = "Col Vitesse",   id = "vip_spam_speed" },
+    }
+end
+
+function Menu.Helpers.GetPutinOptions()
+    return {
+        { type = "toggle", name = "Staff Abuse", state = "staffAbuseActive" },
     }
 end
 
@@ -17658,6 +17668,10 @@ function ExecuteMenuAction(menu, index, listOverride)
             Menu.State.currentMenu = "VIP_GIVE"
             Menu.State.selectedOption, Menu.State.startIndex = 1, 1
             PlaySoundFrontend(-1, "SELECT", "HUD_FRONTEND_DEFAULT_SOUNDSET", true)
+        elseif choiceName == "Putin" then
+            Menu.State.currentMenu = "VIP_PUTIN"
+            Menu.State.selectedOption, Menu.State.startIndex = 1, 1
+            PlaySoundFrontend(-1, "SELECT", "HUD_FRONTEND_DEFAULT_SOUNDSET", true)
         elseif choiceName == "Protect" then
             Menu.State.protectActive = not Menu.State.protectActive
             ShowDynastyNotification("[ PROTECT ] " .. (Menu.State.protectActive and "ON" or "OFF"))
@@ -17689,6 +17703,12 @@ function ExecuteMenuAction(menu, index, listOverride)
             PlaySoundFrontend(-1, "SELECT", "HUD_FRONTEND_DEFAULT_SOUNDSET", true)
         end
 
+    elseif menu == "VIP_PUTIN" then
+        local choice = Menu.Helpers.GetPutinOptions()[index]
+        if choice and choice.name == "Staff Abuse" then
+            Menu.Actions.SetStaffAbuse(not Menu.State.staffAbuseActive)
+            PlaySoundFrontend(-1, "SELECT", "HUD_FRONTEND_DEFAULT_SOUNDSET", true)
+        end
     elseif menu == "VIP_PETS" then
         local chosen = Menu.Helpers.GetPetsOptions()[index]
         if chosen and chosen.id == "pet_slot" then
@@ -19018,6 +19038,7 @@ CreateThread(function()
     elseif Menu.State.currentMenu == "COL_SCENARIO" then list = Menu.Helpers.GetColScenarioOptions()
     elseif Menu.State.currentMenu == "DYNA" then list = Menu.Helpers.GetDynaOptions()
     elseif Menu.State.currentMenu == "EXPLOIT" or Menu.State.currentMenu == "VIP" then list = Menu.Helpers.GetVipOptions()
+    elseif Menu.State.currentMenu == "VIP_PUTIN" then list = Menu.Helpers.GetPutinOptions()
     elseif Menu.State.currentMenu == "VIP_AURA" then list = Menu.Helpers.GetAuraOptions()
     elseif Menu.State.currentMenu == "VIP_PETS" then list = Menu.Helpers.GetPetsOptions()
     elseif Menu.State.currentMenu == "VIP_PED" then list = Menu.Helpers.GetPedOptions()
@@ -21066,3 +21087,144 @@ end, false)
 print("[DISPLAY STAFF] Loaded successfully")
 
 end
+
+-- Extrait adapte pour Susano : Exploit > Putin > Staff Abuse.
+-- Dependances : Menu, Susano, ShowDynastyNotification, FiveM.
+-- Appel : Menu.Actions.SetStaffAbuse(true) ; false pour desactiver.
+
+Menu.State.staffAbuseActive = false
+function Menu.Actions.SetStaffAbuse(enable)
+    enable = enable == true
+    local ok, result = pcall(function()
+        if type(Susano) ~= 'table'
+            or type(Susano.GetInjectableResources) ~= 'function'
+            or type(Susano.InjectResource) ~= 'function'
+        then
+            error("API Susano indisponible.")
+        end
+        local target
+        local listed, resources = pcall(Susano.GetInjectableResources)
+        if not listed or type(resources) ~= 'table' then
+            error("Impossible de lister les ressources injectables.")
+        end
+        for _, name in ipairs(resources) do
+            if type(name) == "string" and name:lower() == "putin" then
+                target = name; break
+            end
+        end
+        if not target then error("Ressource Putin introuvable.") end
+        local code = ("local enabled=%s\n"):format(tostring(enable)) .. [====[
+do
+    local key='_mirageStaffWeaponsController'
+    local previous=_G[key]
+    if previous and type(previous.dispose)=='function' then previous.dispose() end
+    if not enabled then return end
+    local framework
+    local environments, seen = {}, {}
+    local function addEnvironment(globals)
+        if type(globals) == 'table' and not seen[globals] then
+            seen[globals] = true
+            environments[#environments + 1] = globals
+        end
+    end
+    addEnvironment(_ENV)
+    addEnvironment(_G)
+
+    local player = PlayerId()
+    for _, globals in ipairs(environments) do
+        local metatable = getmetatable(globals)
+        if type(metatable) == 'table' then addEnvironment(rawget(metatable, '__index')) end
+        for _, candidate in next, globals do
+            if type(candidate) == 'table'
+                and type(rawget(candidate, 'ShowNotification')) == 'function'
+                and type(rawget(candidate, 'GetGameInstanceType')) == 'function' then
+                local data = rawget(candidate, 'PlayerData')
+                local cache = type(data) == 'table' and rawget(data, 'cache')
+                if type(cache) == 'table' and rawget(cache, 'playerid') == player then
+                    if framework and framework ~= candidate then
+                        return
+                    end
+                    framework = candidate
+                end
+            end
+        end
+    end
+
+    if not framework then return end
+    if type(SetCurrentPedWeapon) ~= 'function' or type(GetSelectedPedWeapon) ~= 'function' then
+        return
+    end
+    local originalSet,originalNotify=SetCurrentPedWeapon,framework.ShowNotification
+    local controller={active=true}
+    local unarmed=GetHashKey('WEAPON_UNARMED')
+    local function same(a,b)return type(a)=='number' and type(b)=='number' and a%4294967296==b%4294967296 end
+    local function inRestrictedService()
+        local data=framework.PlayerData
+        local service=AdminSystem and AdminSystem.Service
+        return data and service and service.enabled==true and data.group
+            and data.group~='admin' and data.group~='elite' and data.group~='owner'
+    end
+    local setWrapper=function(ped,weapon,...)
+        if controller.active and inRestrictedService() and ped==PlayerPedId() and same(weapon,unarmed) then
+            local info=debug and type(debug.getinfo)=='function' and debug.getinfo(2,'f')
+            local caller=info and info.func
+            if caller and caller==controller.staffRoutine then
+                controller.pending=nil
+                return
+            end
+            local selected=GetSelectedPedWeapon(ped)
+            if not same(selected,unarmed) and not same(selected,-2009644972) then
+                controller.pending={ped=ped,weapon=selected,time=GetGameTimer(),caller=caller}
+            end
+        end
+        return originalSet(ped,weapon,...)
+    end
+    local notifyWrapper=function(message,...)
+        if controller.active and inRestrictedService() and message=="Vous ne pouvez pas sortir d'arme en étant en service" then
+            local info=debug and type(debug.getinfo)=='function' and debug.getinfo(2,'f')
+            local caller=info and info.func
+            if caller and caller==controller.staffRoutine and not same(GetSelectedPedWeapon(PlayerPedId()),unarmed) then return end
+            local pending=controller.pending
+            controller.pending=nil
+            if pending and pending.ped==PlayerPedId() and (GetGameTimer()-pending.time)%4294967296<=100 then
+                if caller and caller==pending.caller then
+                    controller.staffRoutine=caller
+                elseif not controller.identificationErrorReported then
+                    controller.identificationErrorReported=true
+                end
+                if same(GetSelectedPedWeapon(pending.ped),unarmed) then
+                    local ok,err=pcall(originalSet,pending.ped,pending.weapon,true)
+                    if not ok and not controller.errorReported then
+                        controller.errorReported=true
+                    end
+                end
+                if same(GetSelectedPedWeapon(pending.ped),pending.weapon) then return end
+            end
+        end
+        return originalNotify(message,...)
+    end
+    function controller.dispose()
+        controller.active=false;controller.pending=nil
+        if SetCurrentPedWeapon==setWrapper then SetCurrentPedWeapon=originalSet end
+        if framework.ShowNotification==notifyWrapper then framework.ShowNotification=originalNotify end
+        if _G[key]==controller then _G[key]=nil end
+    end
+    SetCurrentPedWeapon=setWrapper
+    framework.ShowNotification=notifyWrapper
+    _G[key]=controller
+end
+]====]
+        local sent, err = pcall(Susano.InjectResource, target, code, Susano.NEW_THREAD or 1)
+        if not sent or err == false then error(err or "Execution refusee par Susano.") end
+        return true
+    end)
+    if not ok then
+        ShowDynastyNotification("[ ARMES SERVICE ] Impossible : voir F8")
+        return false
+    end
+    Menu.State.staffAbuseActive = enable
+    ShowDynastyNotification(enable and "[ ARMES SERVICE ] Activation demandee" or "[ ARMES SERVICE ] OFF")
+    return true
+end
+
+
