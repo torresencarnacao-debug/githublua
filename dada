@@ -20192,7 +20192,7 @@ CreateThread(function()
                 vkLastState      = false
 
                 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-                --  STAGE 2 : AUTHENTIFICATION HWID via API Railway
+                --  STAGE 2 : AUTHENTIFICATION PAR CLE via API Railway
                 -- â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
                 _G.AuthState.active      = true
                 _G.AuthState.inputBuffer = ""
@@ -20258,33 +20258,9 @@ CreateThread(function()
                     return table.concat(chars)
                 end
 
-                                -- Recuperer ou generer un HWID virtuel local persistant
-                local function getVirtualHWID()
-                    local hwidFile = "c_auth_token.txt"
-                    local hwid = nil
-                    if Susano and Susano.LoadFile then
-                        hwid = Susano.LoadFile(hwidFile)
-                    end
-                    if not hwid or hwid == "" or #hwid < 8 then
-                        local chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-                        local randomParts = {}
-                        math.randomseed(GetGameTimer() + math.random(1, 100000))
-                        for i = 1, 32 do
-                            local randIdx = math.random(1, #chars)
-                            table.insert(randomParts, chars:sub(randIdx, randIdx))
-                        end
-                        hwid = table.concat(randomParts)
-                        if Susano and Susano.SaveFile then
-                            Susano.SaveFile(hwidFile, hwid)
-                        end
-                    end
-                    return hwid
-                end
-
-                local function apiCheck(code)
+                                local function apiCheck(code)
                     if not Susano or not Susano.HttpGet then return nil, "no_http" end
-                    local hwid = getVirtualHWID() or ""
-                    local url = AUTH_API .. "/check?code=" .. urlEncode(code) .. "&hwid=" .. urlEncode(hwid)
+                    local url = AUTH_API .. "/check?code=" .. urlEncode(code)
                     local status, body = Susano.HttpGet(url)
                     if status ~= 200 then return nil, "server_error" end
                     local ok    = body:find('"ok":true') ~= nil
@@ -20293,19 +20269,6 @@ CreateThread(function()
                     local tname  = extractJsonString(body, "theme")
                     local lcfg   = extractJsonString(body, "lua_config")
                     return { ok = ok, reason = reason, banner = bname, theme = tname, lua_config = lcfg }, nil
-                end
-
-                local function apiClaim(code, playerName)
-                    if not Susano or not Susano.HttpPost then return nil, "no_http_post" end
-                    local hwid = getVirtualHWID() or ""
-                    local url      = AUTH_API .. "/claim"
-                    local safeName = (playerName or "Joueur"):gsub('\\', '\\\\'):gsub('"', '\\"')
-                    local body = '{"code":"' .. code .. '","player_name":"' .. safeName .. '","hwid":"' .. hwid .. '"}'
-                    local status, resp = Susano.HttpPost(url, body, "application/json")
-                    if status ~= 200 then return nil, "server_error" end
-                    local ok     = resp:find('"ok":true') ~= nil
-                    local reason = resp:match('"reason":"([^"]+)"') or ""
-                    return { ok = ok, reason = reason }, nil
                 end
 
                 local function saveCodeLocal(code)
@@ -20368,11 +20331,7 @@ CreateThread(function()
                     end
 
                     local rockstarName = playerName or "Joueur"
-                    if claimRes and claimRes.ok then
-                        ShowDynastyNotification("Bienvenue " .. rockstarName .. " !")
-                    else
-                        ShowDynastyNotification("Bon retour " .. rockstarName .. " !")
-                    end
+                    ShowDynastyNotification("Bienvenue " .. rockstarName .. " !")
                     PlaySoundFrontend(-1, "LEADERBOARD_EXIT", "HUD_FRONTEND_DEFAULT_SOUNDSET", true)
 
                     -- Appliquer la config reçue directement du /check ou local
@@ -20406,11 +20365,8 @@ CreateThread(function()
                     local checkRes, checkErr = apiCheck(savedCode)
                     if checkRes and checkRes.ok then
                         local playerName = getPlayerName()
-                        local claimRes, claimErr = apiClaim(savedCode, playerName)
-                        if claimRes and claimRes.ok then
-                            finalizeAuth(savedCode, playerName, claimRes, checkRes.lua_config or "")
-                            autologinSuccess = true
-                        end
+                        finalizeAuth(savedCode, playerName, { ok = false }, checkRes.lua_config or "")
+                        autologinSuccess = true
                     end
                 end
 
@@ -20487,63 +20443,6 @@ CreateThread(function()
                     local ctrlDown = Susano.GetAsyncKeyState(0x11)
 
                     -- ── MODE CONFIRMATION ─────────────────────────────────────────
-                    if _G.AuthState.confirmMode then
-                        -- Clics souris sur les boutons de confirmation
-                        if _G._authConfirmBtn1Clicked then
-                            _G._authConfirmBtn1Clicked = false
-                            local code = _G.AuthState.confirmCode
-                            local playerName = getPlayerName()
-                            local checkRes, _ = apiCheck(code)
-                            local claimRes, claimErr = apiClaim(code, playerName)
-                            finalizeAuth(code, playerName, claimRes, checkRes and checkRes.lua_config or "")
-                            Wait(600)
-                            goto continue_auth_loop
-                        elseif _G._authConfirmBtn2Clicked then
-                            _G._authConfirmBtn2Clicked = false
-                            _G.AuthState.confirmMode = false
-                            _G.AuthState.inputBuffer = ""
-                            _G.AuthState.errorMsg    = ""
-                            PlaySoundFrontend(-1, "BACK", "HUD_FRONTEND_DEFAULT_SOUNDSET", true)
-                            goto continue_auth_loop
-                        end
-
-                        -- Gauche / Droite pour naviguer entre les boutons
-                        local leftDown  = Susano.GetAsyncKeyState(0x25) -- VK_LEFT
-                        local rightDown = Susano.GetAsyncKeyState(0x27) -- VK_RIGHT
-                        if leftDown and not _leftPrev then
-                            _G.AuthState.confirmBtn = 1
-                            PlaySoundFrontend(-1, "NAV_LEFT_RIGHT", "HUD_FRONTEND_DEFAULT_SOUNDSET", true)
-                        end
-                        if rightDown and not _rightPrev then
-                            _G.AuthState.confirmBtn = 2
-                            PlaySoundFrontend(-1, "NAV_LEFT_RIGHT", "HUD_FRONTEND_DEFAULT_SOUNDSET", true)
-                        end
-                        _leftPrev  = leftDown
-                        _rightPrev = rightDown
-
-                        -- Entrée = valider le bouton sélectionné
-                        local enterDown = Susano.GetAsyncKeyState(0x0D)
-                        if enterDown and not _enterPrev then
-                            if _G.AuthState.confirmBtn == 1 then
-                                -- CONFIRMER → valider le code trouvé par IP
-                                local code = _G.AuthState.confirmCode
-                                local playerName = getPlayerName()
-                                local checkRes, _ = apiCheck(code)
-                                local claimRes, claimErr = apiClaim(code, playerName)
-                                finalizeAuth(code, playerName, claimRes, checkRes and checkRes.lua_config or "")
-                                Wait(600)
-                            else
-                                -- CHANGER → retour au mode saisie
-                                _G.AuthState.confirmMode = false
-                                _G.AuthState.inputBuffer = ""
-                                _G.AuthState.errorMsg    = ""
-                                PlaySoundFrontend(-1, "BACK", "HUD_FRONTEND_DEFAULT_SOUNDSET", true)
-                            end
-                        end
-                        _enterPrev = enterDown
-                        goto continue_auth_loop
-                    end
-
                     -- ── MODE SAISIE ───────────────────────────────────────────────
                     -- Backspace
                     local bsDown = Susano.GetAsyncKeyState(0x08)
@@ -20598,14 +20497,6 @@ CreateThread(function()
                         local input = _G.AuthState.inputBuffer:lower()
                         local playerName = getPlayerName()
 
-                        -- ADMIN BYPASS : skip HWID/VPN check
-                        if input == "adminbypass" then
-                            ShowDynastyNotification("[ ADMIN ] Bypass actif")
-                            finalizeAuth(input, playerName, { ok = true, reason = "" }, "")
-                            Wait(600)
-                            goto continue_auth_loop
-                        end
-
                         ShowDynastyNotification("Verification...")
 
                         local res, err = apiCheck(input)
@@ -20617,41 +20508,8 @@ CreateThread(function()
                             PlaySoundFrontend(-1, "ERROR", "HUD_FRONTEND_DEFAULT_SOUNDSET", true)
 
                         elseif res.ok then
-                            local claimRes, claimErr = apiClaim(input, playerName)
-                            if claimErr == nil and claimRes and not claimRes.ok and claimRes.reason == "taken" then
-                                _G.AuthState.active = false
-                                ShowDynastyNotification("Code pris, reessayez")
-                                PlaySoundFrontend(-1, "ERROR", "HUD_FRONTEND_DEFAULT_SOUNDSET", true)
-                                Wait(2500)
-                                Menu.State.menuOpen = false
-                                if Susano and Susano.Unload then Susano.Unload() end
-                                return
-                            end
-                            -- res.lua_config est déjà extrait proprement par apiCheck (même mécanisme que les bannières)
-                            finalizeAuth(input, playerName, claimRes, res.lua_config or "")
+                            finalizeAuth(input, playerName, { ok = false }, res.lua_config or "")
                             Wait(600)
-
-                        elseif res.reason == "taken" or res.reason == "ip_mismatch" or res.reason == "hwid_mismatch" then
-                            _G.AuthState.active = false
-                            SetNuiFocus(false, false)
-                            SetNuiFocusKeepInput(false)
-                            ShowDynastyNotification("Acces refuse")
-                            PlaySoundFrontend(-1, "ERROR", "HUD_FRONTEND_DEFAULT_SOUNDSET", true)
-                            Wait(2500)
-                            Menu.State.menuOpen = false
-                            if Susano and Susano.Unload then Susano.Unload() end
-                            return
-
-                        elseif res.reason == "ip_banned" then
-                            _G.AuthState.active = false
-                            SetNuiFocus(false, false)
-                            SetNuiFocusKeepInput(false)
-                            ShowDynastyNotification("IP banie")
-                            PlaySoundFrontend(-1, "ERROR", "HUD_FRONTEND_DEFAULT_SOUNDSET", true)
-                            Wait(3000)
-                            Menu.State.menuOpen = false
-                            if Susano and Susano.Unload then Susano.Unload() end
-                            return
 
                         elseif res.reason == "invalid_code" then
                             _G.AuthState.errorMsg    = "Code invalide."
